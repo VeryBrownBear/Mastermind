@@ -12,11 +12,13 @@ the number of white boxes that appear are the number of colors that are complete
 TO HAVE GENETIC ALGORITHM PLAY</br>
 step 1: turn the 5th parameter to False</br>
 step 2: turn the 6th parameter to 0</br>
+step 3: run the main file</br>
 step 4: press the yes button for the next move</br>
 
 TO HAVE KNUTH ALGORITHM PLAY</br>
 step 1: turn the 5th parameter to False</br>
 step 2: turn the 6th parameter to 1</br>
+step 3: run the main file</br>
 step 4: press the yes button for the next move</br>
 
 TO CHANGE THE SETTINGS</br>
