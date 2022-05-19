@@ -4,14 +4,12 @@ pygame.init()
 import math
 import random
 import distinctipy
-import time
+import itertools
 import config
-
-import cProfile
-import pstats
+import time
 
 class Game:
-    def __init__(self, code_length: int, number_of_colors: int, allow_duplicates: bool, number_of_guesses: int, human_playing: bool):
+    def __init__(self, code_length: int, number_of_colors: int, allow_duplicates: bool, number_of_guesses: int, human_playing: bool, algorithm: int):
         # INITIALIZED GAME VARIABLES
         self.code = []
         self.code_length = code_length
@@ -42,6 +40,8 @@ class Game:
         self.wrong_positions = 0
         self.guesses = []
 
+        self.algorithm = algorithm
+
         # GENETIC ALGORITHM
         self.previous_generation = []
         self.current_generation = []
@@ -54,6 +54,13 @@ class Game:
         self.inversion_prob = 0.02
         self.exact_positions_weight = 2
         self.wrong_positions_weight = 3
+        self.eligible_children = []
+
+        # KNUTH
+        self.possible_codes = []
+
+        self.timing = [0, 1]
+
 
     # Check the input with the code
     # Returns a tuple (exact, wrong)
@@ -75,7 +82,18 @@ class Game:
                 code_list.remove(input_element)
 
         return (exact_positions, wrong_positions)
-    
+
+    def knuth(self):
+        previous_guess = self.guesses[-1]
+        good_guesses = []
+        for code in self.possible_codes:
+            code_score = self.check_input(previous_guess[0], code)
+            if code_score == previous_guess[1]:
+                good_guesses.append(code)
+        self.possible_codes = good_guesses
+        guess = random.choice(self.possible_codes)
+        return guess
+        
     # Fitness evaluation function
     # A guess consists of a (guessed code, feedback code got)
     # Compare with every previous guess as if they were the secret code
@@ -87,8 +105,10 @@ class Game:
             input_feedback = self.check_input(input, guess[0])
             total_exact_positions_diff += abs(input_feedback[0] - guess[1][0])
             total_wrong_positions_diff += abs(input_feedback[1] - guess[1][1])
+        fitness_score = self.exact_positions_weight * total_exact_positions_diff + self.wrong_positions_weight * total_wrong_positions_diff
         eligible = total_exact_positions_diff == 0 and total_wrong_positions_diff == 0
-        return (self.exact_positions_weight * total_exact_positions_diff + self.wrong_positions_weight * total_wrong_positions_diff, eligible)
+        if eligible: self.eligible_children.append((input, fitness_score))
+        return (fitness_score, eligible)
 
     # Crossover function
     # A randomly designated "crossover" point which takes the information left of the first parent and
@@ -127,6 +147,7 @@ class Game:
             input[i] = random.choice(self.colors)
         return input
 
+    # Randomly generate a popuation with distinct codes
     def generate_previous_generation(self):
         while len(self.previous_generation) < self.population_size:
             code = [random.choice(self.colors) for i in range(self.code_length)]
@@ -134,21 +155,25 @@ class Game:
                 self.previous_generation.append((code, self.evaluate_fitness(code)))
 
     # Genetic algorithm
-    # An algorithm that uses the evolutionary concepts of natural selection and genetics to generate a good guess for the next iteration
+    # An algorithm that uses the evolutionary concepts of natural selection and genetics to generate a guess that is similar to the rest of the guesses played
     # Each call to this function will be called an iteration. Populations generated within an iteration will be called a generation
     # Before the first iteration, a random guess is made to provide information that the algorithm can generate generations off of
     def natural_selection(self) -> list:
         gen = 0
         stuck = 0
-        # Before an iteration, generate a new initial population of a constant size population_size with randomly generated distinct codes
+        self.eligible_children = []
+        # Before an iteration, generate a new initial population of a constant size with randomly generated distinct codes
         # This is to give the algorithm a vast amount of genes, which is the information in a code,
         # to explore the game decision tree after taking in the information given by the feedback boxes
         while gen < self.max_generations:
             self.current_generation = []
-            # Perform a reset of the generation if the iteration has been stuck for more generations than allowed
+            # Perform a reset of the generation if the iteration has been stuck for more generations than allowed by
+            # Replacing the previous generation with a new population
             if stuck > self.stall_generations:
+                print(f"Reset on gen {gen}")
                 self.previous_generation = []
                 self.generate_previous_generation()
+                stuck = 0
             # Populate the current generation with the children of parents from the previous generation
             # Each child that inherited information from the two parents has a chance for additional information to be manipulated
             # This is to increase diversity in the gene pool and decrease the chances that the population gets stuck
@@ -165,11 +190,16 @@ class Game:
                     for child in children:
                         # 3% chance of mutation in a child
                         # Mutation randomly changes one piece of information to a random color
-                        if random.random() <= self.mutation_prob:
+                        if random.random() < self.mutation_prob:
                             child = self.mutate(child)
+                        # 3& chance for permutation to swap the position of two pieces of information in a child
+                        if random.random() < self.permutation_prob:
                             child = self.permutation(child)
+                        # 2% chance of inversion to generate a random sequence of colors between two random points in a child
+                        if random.random() < self.inversion_prob:
+                            child = self.inversion(child)
                         # After child has been made, evaluate the fitness of the child
-                        # Fitness is the score given to a child to determine whether it is a guess that will give the most information
+                        # Fitness is the score given to a child to numerically describe how similar a child is to the guesses played on the board
                         # Fitness is evaluated by doing the following:
                         #   For every guess that have been played on the board
                         #   Find the number of exact_positions that the child would get if the guess was the secret code (ChildE), then the wrong_positions (ChildW)
@@ -177,7 +207,7 @@ class Game:
                         #   and ChildW and GuessW (being the number of wrong positions the guess got against the actual secret code)
                         # If the total sum of these differences is 0, then the code is eligible
                         # If the population is unable to make any eligible children then it is stuck
-                        # The fitness score is the weight of the exact_positions times ChildE plus the weight of the wrong_positions times ChildW
+                        # The fitness score is determined by the sum of the weight of the exact_positions times ChildE and the weight of the wrong_positions times ChildW
                         if child not in self.current_generation:
                             self.current_generation.append((child, self.evaluate_fitness(child)))
                 # If a child is not made, take one from the previous generation to live on to the current generation
@@ -187,21 +217,15 @@ class Game:
                         child = random.choice(self.previous_generation)[0]
                     self.current_generation.append((child, self.evaluate_fitness(child)))
 
-            eligible_children = [(child, score) for (child, score) in self.current_generation if score[1]]
-            # Sort the generation based on their fitness score
-            self.current_generation = sorted(self.current_generation, key = lambda i: (i[1][1], i[1][0]))
-
             # If there are no eligible children then go to next generation
-            if not eligible_children:
+            if not self.eligible_children:
                 print(f"Skipped gen {gen}")
                 self.previous_generation = self.current_generation
-                gen += 1;
+                gen += 1
                 stuck += 1
             # Return the first instance a generation is able to create eligible children
             else:
-                return eligible_children
-
-    #def knuth_algorithm(self):
+                return self.eligible_children
 
     # Update current line upon pressing yes button (for human playing)
     def update_display(self, input: list):
@@ -284,6 +308,7 @@ class Game:
         self.generate_colors()
         self.generate_code()
         self.initialize_display()
+        self.possible_codes = [tuple(x) for x in itertools.product(self.colors, repeat=self.code_length)]
         print(self.code)
         if not self.human_playing:
             self.update_display([random.choice(self.colors) for i in range(self.code_length)])
@@ -294,6 +319,7 @@ class Game:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.game_over = True
+                    config.global_game_over = True
                 if event.type == pygame.MOUSEBUTTONDOWN and self.clicked == False:
                     self.clicked = True
                 if event.type == pygame.MOUSEBUTTONUP and self.clicked == True:
@@ -310,21 +336,26 @@ class Game:
                                 pygame.draw.rect(config.screen, self.selected_color, (math.floor(pos[0] / self.columns_scale) * self.columns_scale + self.thickness, math.floor(pos[1] / self.rows_scale) * self.rows_scale + self.thickness, self.columns_scale - self.thickness, self.rows_scale - self.thickness))
                                 pygame.display.flip()
                                 self.current_input[math.floor(pos[0] / self.columns_scale)] = self.selected_color
-                    else:
+                    if self.exact_positions != self.code_length:
                         # IF PRESS YES BUTTON TO CHECK LINE
                         if pos[1] >= self.length - self.rows_scale + self.thickness:
                             if not self.human_playing:
-                                #with cProfile.Profile() as pr:
-                                #    self.natural_selection()
-                                #stats = pstats.Stats(pr)
-                                #stats.sort_stats(pstats.SortKey.TIME)
-                                #stats.print_stats()
-                                start = time.time()
-                                ai = sorted(self.natural_selection(), key = lambda i: i[1])[0][0]
-                                config.total_time += time.time() - start
-                                print(ai)
-                                print(config.total_time)
-                                self.update_display(ai)
+                                if self.algorithm == 0:
+                                    start_time = time.time()
+                                    ai = sorted(self.natural_selection(), key = lambda i: i[1])[0][0]
+                                    end_time = time.time() - start_time
+                                    self.timing[0] += end_time
+                                    self.timing[1] += 1
+                                    print(ai)
+                                    self.update_display(ai)
+                                if self.algorithm == 1:
+                                    start_time = time.time()
+                                    code = self.knuth()
+                                    end_time = time.time() - start_time
+                                    self.timing[0] += end_time
+                                    self.timing[1] += 1
+                                    print(code)
+                                    self.update_display(code)
                             else:
                                 print(self.current_input)
                                 if 0 not in self.current_input:
@@ -332,4 +363,6 @@ class Game:
                                     self.update_feedback_box()
                                     self.current_line -= 1
                                     self.current_input = [0] * self.code_length
-        pygame.time.delay(2000)
+        print(self.timing)
+        print(len(self.guesses))
+        return self.timing
