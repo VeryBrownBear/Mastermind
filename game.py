@@ -365,4 +365,5 @@ class Game:
                                     self.current_input = [0] * self.code_length
         print(self.timing)
         print(len(self.guesses))
+        time.sleep(2)
         return self.timing
